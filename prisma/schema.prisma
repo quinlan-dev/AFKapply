@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  passwordHash String
+  name         String?
+  dailyApplyCap Int         @default(5)
+  createdAt    DateTime     @default(now())
+  resumes      Resume[]
+  preferences  Preference[]
+  matches      Match[]
+}
+
+model Resume {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  fileName  String
+  rawText   String   @db.Text
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  matches   Match[]
+}
+
+model Preference {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  roleTitles   String[]
+  locations    String[]
+  remoteOnly   Boolean  @default(false)
+  minSalary    Int?
+  companySlugs String[]
+  createdAt    DateTime @default(now())
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  source      String
+  externalId  String
+  company     String
+  title       String
+  location    String?
+  description String    @db.Text
+  url         String
+  postedAt    DateTime?
+  fetchedAt   DateTime  @default(now())
+  matches     Match[]
+
+  @@unique([source, externalId])
+}
+
+model Match {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  resumeId  String
+  resume    Resume   @relation(fields: [resumeId], references: [id])
+  jobId     String
+  job       Job      @relation(fields: [jobId], references: [id])
+  score     Int
+  rationale String   @db.Text
+  status    String   @default("new")
+  createdAt DateTime @default(now())
+  documents TailoredDocument[]
+
+  @@unique([userId, jobId])
+}
+
+model TailoredDocument {
+  id        String   @id @default(cuid())
+  matchId   String
+  match     Match    @relation(fields: [matchId], references: [id])
+  type      String   // cover_letter, resume_summary, supporting_paragraph
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([matchId, type])
+}
