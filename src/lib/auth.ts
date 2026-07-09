@@ -2,9 +2,10 @@ import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "./prisma";
+import { rateLimit } from "./rateLimit";
 
 export const authOptions: NextAuthOptions = {
-  session: { strategy: "jwt" },
+  session: { strategy: "jwt", maxAge: 7 * 24 * 60 * 60 },
   pages: { signIn: "/" },
   providers: [
     CredentialsProvider({
@@ -16,10 +17,17 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null;
 
-        const user = await prisma.user.findUnique({
-          where: { email: credentials.email }
-        });
-        if (!user) return null;
+        const email = credentials.email.toLowerCase().trim();
+
+        // Throttle brute-force attempts per account.
+        if (!rateLimit(`login:${email}`, 10, 15 * 60 * 1000)) return null;
+
+        const user = await prisma.user.findUnique({ where: { email } });
+        if (!user) {
+          // Equalize timing between unknown-user and wrong-password paths.
+          await bcrypt.compare(credentials.password, "$2a$12$invalidsaltinvalidsaltinvalidsaltinvalid12");
+          return null;
+        }
 
         const valid = await bcrypt.compare(credentials.password, user.passwordHash);
         if (!valid) return null;
@@ -34,7 +42,7 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
     async session({ session, token }) {
-      if (session.user) (session.user as any).id = token.id;
+      if (session.user) (session.user as { id?: string }).id = token.id as string;
       return session;
     }
   }

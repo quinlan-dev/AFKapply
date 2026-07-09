@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { z } from "zod";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireUserId } from "@/lib/session";
 import { generateTailoredDocument, DocumentType } from "@/lib/aiDocuments";
 
 const generateSchema = z.object({
@@ -14,12 +13,6 @@ const updateSchema = z.object({
   documentId: z.string(),
   content: z.string().min(1)
 });
-
-async function requireUserId() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return null;
-  return (session.user as any).id as string;
-}
 
 export async function GET(req: Request) {
   const userId = await requireUserId();

@@ -1,47 +1,65 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { z } from "zod";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireUserId } from "@/lib/session";
+import { sanitizeSlug } from "@/lib/jobSources";
+
+const JOB_TYPES = ["full_time", "part_time", "contract", "internship"] as const;
 
 const schema = z.object({
-  roleTitles: z.array(z.string()).min(1),
-  locations: z.array(z.string()).default([]),
+  roleTitles: z.array(z.string().trim().min(1).max(80)).min(1).max(10),
+  keywords: z.array(z.string().trim().min(1).max(50)).max(20).default([]),
+  locations: z.array(z.string().trim().min(1).max(80)).max(10).default([]),
+  searchLocation: z.string().trim().max(120).nullable().optional(),
+  maxDistanceMiles: z.number().int().min(1).max(500).nullable().optional(),
   remoteOnly: z.boolean().default(false),
-  minSalary: z.number().nullable().optional(),
-  companySlugs: z.array(z.string()).min(1)
+  minSalary: z.number().int().min(0).max(2_000_000).nullable().optional(),
+  jobTypes: z.array(z.enum(JOB_TYPES)).max(4).default([]),
+  companySlugs: z.array(z.string().trim().min(1).max(64)).max(10).default([]),
+  leverSlugs: z.array(z.string().trim().min(1).max(64)).max(10).default([])
 });
 
 export async function GET() {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
-  }
+  const userId = await requireUserId();
+  if (!userId) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
 
-  const userId = (session.user as any).id as string;
-  const preference = await prisma.preference.findFirst({
-    where: { userId },
-    orderBy: { createdAt: "desc" }
-  });
-
+  const preference = await prisma.preference.findUnique({ where: { userId } });
   return NextResponse.json(preference);
 }
 
 export async function POST(req: Request) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+  const userId = await requireUserId();
+  if (!userId) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   }
 
-  const body = await req.json();
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json({ error: "Check your inputs and try again" }, { status: 400 });
   }
 
-  const userId = (session.user as any).id as string;
-  const preference = await prisma.preference.create({
-    data: { userId, ...parsed.data }
+  const data = {
+    ...parsed.data,
+    searchLocation: parsed.data.searchLocation ?? null,
+    maxDistanceMiles: parsed.data.maxDistanceMiles ?? null,
+    minSalary: parsed.data.minSalary ?? null,
+    companySlugs: parsed.data.companySlugs
+      .map(sanitizeSlug)
+      .filter((s): s is string => s !== null),
+    leverSlugs: parsed.data.leverSlugs
+      .map(sanitizeSlug)
+      .filter((s): s is string => s !== null)
+  };
+
+  const preference = await prisma.preference.upsert({
+    where: { userId },
+    update: data,
+    create: { userId, ...data }
   });
 
   return NextResponse.json(preference);

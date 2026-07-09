@@ -8,15 +8,27 @@ datasource db {
 }
 
 model User {
-  id           String       @id @default(cuid())
-  email        String       @unique
-  passwordHash String
-  name         String?
-  dailyApplyCap Int         @default(5)
-  createdAt    DateTime     @default(now())
-  resumes      Resume[]
-  preferences  Preference[]
-  matches      Match[]
+  id            String   @id @default(cuid())
+  email         String   @unique
+  passwordHash  String
+  name          String?
+  dailyApplyCap Int      @default(10)
+  dailyEmailCap Int      @default(10)
+  // Outbound email settings (user's own account, e.g. Gmail app password).
+  // smtpPassEnc is AES-256-GCM encrypted at rest, never returned to the client.
+  smtpHost      String?
+  smtpPort      Int?
+  smtpUser      String?
+  smtpPassEnc   String?
+  fromName      String?
+  createdAt     DateTime @default(now())
+
+  resumes        Resume[]
+  preferences    Preference[]
+  matches        Match[]
+  applications   Application[]
+  contacts       Contact[]
+  outreachEmails OutreachEmail[]
 }
 
 model Resume {
@@ -31,15 +43,21 @@ model Resume {
 }
 
 model Preference {
-  id           String   @id @default(cuid())
-  userId       String
-  user         User     @relation(fields: [userId], references: [id])
-  roleTitles   String[]
-  locations    String[]
-  remoteOnly   Boolean  @default(false)
-  minSalary    Int?
-  companySlugs String[]
-  createdAt    DateTime @default(now())
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id])
+  roleTitles       String[]
+  keywords         String[]
+  locations        String[]
+  searchLocation   String?
+  maxDistanceMiles Int?
+  remoteOnly       Boolean  @default(false)
+  minSalary        Int?
+  jobTypes         String[]
+  companySlugs     String[] // Greenhouse board slugs
+  leverSlugs       String[] // Lever board slugs
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }
 
 model Job {
@@ -51,6 +69,9 @@ model Job {
   location    String?
   description String    @db.Text
   url         String
+  salaryMin   Int?
+  salaryMax   Int?
+  jobType     String?
   postedAt    DateTime?
   fetchedAt   DateTime  @default(now())
   matches     Match[]
@@ -59,18 +80,19 @@ model Job {
 }
 
 model Match {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  resumeId  String
-  resume    Resume   @relation(fields: [resumeId], references: [id])
-  jobId     String
-  job       Job      @relation(fields: [jobId], references: [id])
-  score     Int
-  rationale String   @db.Text
-  status    String   @default("new")
-  createdAt DateTime @default(now())
-  documents TailoredDocument[]
+  id          String             @id @default(cuid())
+  userId      String
+  user        User               @relation(fields: [userId], references: [id])
+  resumeId    String
+  resume      Resume             @relation(fields: [resumeId], references: [id])
+  jobId       String
+  job         Job                @relation(fields: [jobId], references: [id])
+  score       Int
+  rationale   String             @db.Text
+  status      String             @default("new") // new, saved, dismissed
+  createdAt   DateTime           @default(now())
+  documents   TailoredDocument[]
+  application Application?
 
   @@unique([userId, jobId])
 }
@@ -79,10 +101,57 @@ model TailoredDocument {
   id        String   @id @default(cuid())
   matchId   String
   match     Match    @relation(fields: [matchId], references: [id])
-  type      String   // cover_letter, resume_summary, supporting_paragraph
+  type      String // cover_letter, resume_summary, supporting_paragraph
   content   String   @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([matchId, type])
+}
+
+model Application {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  matchId   String    @unique
+  match     Match     @relation(fields: [matchId], references: [id])
+  // queued -> ready -> applied -> interviewing -> offer | rejected | withdrawn
+  status    String    @default("queued")
+  notes     String?   @db.Text
+  appliedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Contact {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  company      String
+  domain       String?
+  name         String?
+  title        String?
+  linkedinUrl  String?
+  email        String? // confirmed address chosen by the user
+  emailGuesses String[] // pattern-based candidates, never auto-sent
+  source       String   @default("manual")
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now())
+
+  outreachEmails OutreachEmail[]
+}
+
+model OutreachEmail {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  contactId String
+  contact   Contact   @relation(fields: [contactId], references: [id])
+  toEmail   String?
+  subject   String
+  body      String    @db.Text
+  status    String    @default("draft") // draft, sent, failed
+  sentAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }

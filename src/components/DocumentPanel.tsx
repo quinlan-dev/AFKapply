@@ -21,14 +21,15 @@ export default function DocumentPanel({ matchId }: { matchId: string }) {
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved">("idle");
 
   useEffect(() => {
-    fetch(`/api/documents?matchId=${matchId}`)
+    fetch(`/api/documents?matchId=${encodeURIComponent(matchId)}`)
       .then((res) => res.json())
       .then((data: StoredDoc[]) => {
+        if (!Array.isArray(data)) return;
         const map: Record<string, StoredDoc> = {};
         data.forEach((d) => (map[d.type] = d));
         setDocs(map);
-        if (map[activeTab]) setDraft(map[activeTab].content);
-      });
+      })
+      .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchId]);
 
@@ -51,8 +52,8 @@ export default function DocumentPanel({ matchId }: { matchId: string }) {
 
       setDocs((prev) => ({ ...prev, [type]: data }));
       if (type === activeTab) setDraft(data.content);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Generation failed");
     } finally {
       setLoading((prev) => ({ ...prev, [type]: false }));
     }
@@ -85,17 +86,29 @@ export default function DocumentPanel({ matchId }: { matchId: string }) {
     URL.revokeObjectURL(url);
   }
 
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(draft);
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 1500);
+    } catch {
+      // clipboard unavailable, ignore
+    }
+  }
+
   const currentDoc = docs[activeTab];
 
   return (
-    <div className="mt-3 border-t pt-3">
-      <div className="flex gap-3 text-xs mb-3">
+    <div className="mt-4 border-t border-slate-100 pt-4">
+      <div className="flex gap-2 mb-3">
         {TABS.map((tab) => (
           <button
             key={tab.key}
             onClick={() => setActiveTab(tab.key)}
-            className={`px-2 py-1 rounded ${
-              activeTab === tab.key ? "bg-accent text-white" : "bg-gray-100 text-gray-600"
+            className={`chip !px-3 !py-1.5 transition-colors ${
+              activeTab === tab.key
+                ? "bg-accent text-white"
+                : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
             }`}
           >
             {tab.label}
@@ -109,9 +122,11 @@ export default function DocumentPanel({ matchId }: { matchId: string }) {
         <button
           onClick={() => generate(activeTab)}
           disabled={loading[activeTab]}
-          className="text-xs bg-ink text-white rounded px-3 py-1.5 disabled:opacity-50"
+          className="btn-primary !py-1.5"
         >
-          {loading[activeTab] ? "Writing..." : `Generate ${TABS.find((t) => t.key === activeTab)?.label}`}
+          {loading[activeTab]
+            ? "Writing..."
+            : `Generate ${TABS.find((t) => t.key === activeTab)?.label.toLowerCase()}`}
         </button>
       )}
 
@@ -120,24 +135,27 @@ export default function DocumentPanel({ matchId }: { matchId: string }) {
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            rows={activeTab === "resume_summary" ? 3 : 8}
-            className="w-full border rounded-md px-3 py-2 text-sm"
+            rows={activeTab === "resume_summary" ? 3 : 10}
+            className="input !text-sm leading-relaxed"
           />
-          <div className="flex gap-2 mt-2 items-center">
-            <button onClick={saveEdit} className="text-xs bg-accent text-white rounded px-3 py-1.5">
+          <div className="flex flex-wrap gap-2 mt-2 items-center">
+            <button onClick={saveEdit} className="btn-primary !py-1.5 !text-xs">
               Save edits
             </button>
             <button
               onClick={() => generate(activeTab)}
               disabled={loading[activeTab]}
-              className="text-xs bg-gray-100 rounded px-3 py-1.5 disabled:opacity-50"
+              className="btn-secondary !py-1.5 !text-xs"
             >
               {loading[activeTab] ? "Rewriting..." : "Regenerate"}
             </button>
-            <button onClick={download} className="text-xs bg-gray-100 rounded px-3 py-1.5">
+            <button onClick={copy} className="btn-secondary !py-1.5 !text-xs">
+              Copy
+            </button>
+            <button onClick={download} className="btn-secondary !py-1.5 !text-xs">
               Download .txt
             </button>
-            {saveStatus === "saved" && <span className="text-xs text-green-700">Saved</span>}
+            {saveStatus === "saved" && <span className="text-xs text-good">✓</span>}
           </div>
         </div>
       )}

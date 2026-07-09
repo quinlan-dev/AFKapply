@@ -1,29 +1,47 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireUserId } from "@/lib/session";
+import { rateLimit } from "@/lib/rateLimit";
 import { extractResumeText } from "@/lib/resumeParser";
 
+const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_EXTENSIONS = [".pdf", ".docx", ".txt"];
+
 export async function POST(req: Request) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+  const userId = await requireUserId();
+  if (!userId) return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+
+  if (!rateLimit(`upload:${userId}`, 10, 10 * 60 * 1000)) {
+    return NextResponse.json({ error: "Too many uploads, wait a few minutes" }, { status: 429 });
   }
 
   const formData = await req.formData();
-  const file = formData.get("file") as File | null;
+  const file = formData.get("file");
 
-  if (!file) {
+  if (!(file instanceof File)) {
     return NextResponse.json({ error: "No file provided" }, { status: 400 });
+  }
+
+  const fileName = file.name.slice(0, 200);
+  const ext = fileName.toLowerCase().slice(fileName.lastIndexOf("."));
+  if (!ALLOWED_EXTENSIONS.includes(ext)) {
+    return NextResponse.json({ error: "Upload a PDF, DOCX, or TXT file" }, { status: 400 });
+  }
+
+  if (file.size > MAX_FILE_BYTES) {
+    return NextResponse.json({ error: "File too large, 5 MB max" }, { status: 400 });
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
 
   let rawText: string;
   try {
-    rawText = await extractResumeText(buffer, file.name);
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 400 });
+    rawText = await extractResumeText(buffer, fileName);
+  } catch {
+    return NextResponse.json(
+      { error: "Could not read that file. Try exporting it again as PDF or DOCX." },
+      { status: 400 }
+    );
   }
 
   if (rawText.length < 50) {
@@ -33,8 +51,6 @@ export async function POST(req: Request) {
     );
   }
 
-  const userId = (session.user as any).id as string;
-
   await prisma.resume.updateMany({
     where: { userId },
     data: { isActive: false }
@@ -43,8 +59,8 @@ export async function POST(req: Request) {
   const resume = await prisma.resume.create({
     data: {
       userId,
-      fileName: file.name,
-      rawText,
+      fileName,
+      rawText: rawText.slice(0, 100_000),
       isActive: true
     }
   });
