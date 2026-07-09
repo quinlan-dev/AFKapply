@@ -23,8 +23,9 @@ const securityHeaders = [
 ];
 
 const nextConfig = {
-  experimental: {
-    serverComponentsExternalPackages: ["pdf-parse", "mammoth"]
+  serverExternalPackages: ["pdf-parse", "mammoth"],
+  turbopack: {
+    root: __dirname
   },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
