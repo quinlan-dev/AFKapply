@@ -2,6 +2,14 @@
 
 import { useEffect, useState } from "react";
 import ResumeUpload from "./ResumeUpload";
+import { TagInput, AutocompleteInput } from "./TagInput";
+import {
+  ROLE_SUGGESTIONS,
+  SKILL_SUGGESTIONS,
+  LOCATION_SUGGESTIONS,
+  GREENHOUSE_BOARD_SUGGESTIONS,
+  LEVER_BOARD_SUGGESTIONS
+} from "@/lib/suggestions";
 
 type Settings = {
   email: string;
@@ -26,10 +34,17 @@ type Preference = {
   maxDistanceMiles: number | null;
   remoteOnly: boolean;
   minSalary: number | null;
+  salaryPeriod: string;
   jobTypes: string[];
   companySlugs: string[];
   leverSlugs: string[];
 } | null;
+
+const HOURS_PER_WORK_YEAR = 2080;
+const SALARY_SLIDER = {
+  yearly: { max: 300_000, step: 5_000 },
+  hourly: { max: 150, step: 1 }
+} as const;
 
 const JOB_TYPE_OPTIONS = [
   { key: "full_time", label: "Full-time" },
@@ -38,24 +53,21 @@ const JOB_TYPE_OPTIONS = [
   { key: "internship", label: "Internship" }
 ];
 
-function splitList(value: string): string[] {
-  return value.split(",").map((v) => v.trim()).filter(Boolean);
-}
-
 export default function SettingsClient() {
   const [settings, setSettings] = useState<Settings | null>(null);
 
   // preferences form state
-  const [roleTitles, setRoleTitles] = useState("");
-  const [keywords, setKeywords] = useState("");
-  const [locations, setLocations] = useState("");
+  const [roleTitles, setRoleTitles] = useState<string[]>([]);
+  const [keywords, setKeywords] = useState<string[]>([]);
+  const [locations, setLocations] = useState<string[]>([]);
   const [searchLocation, setSearchLocation] = useState("");
   const [maxDistance, setMaxDistance] = useState("");
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [minSalary, setMinSalary] = useState("");
+  const [salaryPeriod, setSalaryPeriod] = useState<"yearly" | "hourly">("yearly");
   const [jobTypes, setJobTypes] = useState<string[]>([]);
-  const [companySlugs, setCompanySlugs] = useState("");
-  const [leverSlugs, setLeverSlugs] = useState("");
+  const [companySlugs, setCompanySlugs] = useState<string[]>([]);
+  const [leverSlugs, setLeverSlugs] = useState<string[]>([]);
   const [prefStatus, setPrefStatus] = useState("");
 
   // email/profile form state
@@ -86,37 +98,58 @@ export default function SettingsClient() {
       .then((r) => r.json())
       .then((pref: Preference) => {
         if (!pref) return;
-        setRoleTitles(pref.roleTitles.join(", "));
-        setKeywords(pref.keywords.join(", "));
-        setLocations(pref.locations.join(", "));
+        setRoleTitles(pref.roleTitles);
+        setKeywords(pref.keywords);
+        setLocations(pref.locations);
         setSearchLocation(pref.searchLocation ?? "");
         setMaxDistance(pref.maxDistanceMiles ? String(pref.maxDistanceMiles) : "");
         setRemoteOnly(pref.remoteOnly);
         setMinSalary(pref.minSalary ? String(pref.minSalary) : "");
+        setSalaryPeriod(pref.salaryPeriod === "hourly" ? "hourly" : "yearly");
         setJobTypes(pref.jobTypes);
-        setCompanySlugs(pref.companySlugs.join(", "));
-        setLeverSlugs(pref.leverSlugs.join(", "));
+        setCompanySlugs(pref.companySlugs);
+        setLeverSlugs(pref.leverSlugs);
       })
       .catch(() => {});
   }, []);
 
+  // Converts the entered amount when flipping between yearly and hourly so
+  // the minimum keeps meaning the same thing.
+  function switchSalaryPeriod(next: "yearly" | "hourly") {
+    if (next === salaryPeriod) return;
+    setSalaryPeriod(next);
+    const n = Number(minSalary);
+    if (minSalary && Number.isFinite(n) && n > 0) {
+      setMinSalary(
+        next === "hourly"
+          ? String(Math.round(n / HOURS_PER_WORK_YEAR))
+          : String(Math.round(n * HOURS_PER_WORK_YEAR))
+      );
+    }
+  }
+
   async function savePreferences(e: React.FormEvent) {
     e.preventDefault();
     setPrefStatus("");
+    if (roleTitles.length === 0) {
+      setPrefStatus("Add at least one role title");
+      return;
+    }
     const res = await fetch("/api/preferences", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        roleTitles: splitList(roleTitles),
-        keywords: splitList(keywords),
-        locations: splitList(locations),
+        roleTitles,
+        keywords,
+        locations,
         searchLocation: searchLocation.trim() || null,
-        maxDistanceMiles: maxDistance ? Number(maxDistance) : null,
+        maxDistanceMiles: maxDistance ? Math.round(Number(maxDistance)) : null,
         remoteOnly,
-        minSalary: minSalary ? Number(minSalary) : null,
+        minSalary: minSalary ? Math.round(Number(minSalary)) : null,
+        salaryPeriod,
         jobTypes,
-        companySlugs: splitList(companySlugs),
-        leverSlugs: splitList(leverSlugs)
+        companySlugs,
+        leverSlugs
       })
     });
     const data = await res.json();
@@ -176,31 +209,111 @@ export default function SettingsClient() {
         <form onSubmit={savePreferences} className="grid sm:grid-cols-2 gap-4">
           <div className="sm:col-span-2">
             <label className="label">Role titles you&apos;re targeting *</label>
-            <input value={roleTitles} onChange={(e) => setRoleTitles(e.target.value)} required className="input" placeholder="software engineer, data analyst" />
-            <p className="hint">Comma separated, matched against job titles</p>
+            <TagInput
+              value={roleTitles}
+              onChange={setRoleTitles}
+              suggestions={ROLE_SUGGESTIONS}
+              max={10}
+              ariaLabel="Role titles you're targeting"
+            />
           </div>
           <div className="sm:col-span-2">
             <label className="label">Skill keywords</label>
-            <input value={keywords} onChange={(e) => setKeywords(e.target.value)} className="input" placeholder="python, react, sql" />
+            <TagInput
+              value={keywords}
+              onChange={setKeywords}
+              suggestions={SKILL_SUGGESTIONS}
+              max={20}
+              ariaLabel="Skill keywords"
+            />
             <p className="hint">Boosts matching and scoring</p>
           </div>
           <div>
-            <label className="label">Acceptable locations</label>
-            <input value={locations} onChange={(e) => setLocations(e.target.value)} className="input" placeholder="New York, Austin" />
+            <label className="label">Preferred locations</label>
+            <TagInput
+              value={locations}
+              onChange={setLocations}
+              suggestions={LOCATION_SUGGESTIONS}
+              max={10}
+              ariaLabel="Preferred locations"
+            />
             <p className="hint">Remote jobs always pass this filter</p>
           </div>
           <div>
-            <label className="label">Minimum salary (yearly)</label>
-            <input type="number" min={0} value={minSalary} onChange={(e) => setMinSalary(e.target.value)} className="input" placeholder="60000" />
-            <p className="hint">Filters out jobs that list a lower max</p>
+            <label className="label">Minimum salary</label>
+            <div className="flex items-center gap-2 mb-2">
+              {(["yearly", "hourly"] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => switchSalaryPeriod(p)}
+                  className={`chip !px-3 !py-1.5 transition-colors ${
+                    salaryPeriod === p
+                      ? "bg-accent text-white"
+                      : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {p === "yearly" ? "Salary (yearly)" : "Hourly"}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={0}
+                max={SALARY_SLIDER[salaryPeriod].max}
+                step={SALARY_SLIDER[salaryPeriod].step}
+                value={minSalary ? Math.min(Number(minSalary), SALARY_SLIDER[salaryPeriod].max) : 0}
+                onChange={(e) => setMinSalary(e.target.value === "0" ? "" : e.target.value)}
+                className="flex-1 accent-accent"
+                aria-label="Minimum salary slider"
+              />
+              <input
+                type="number"
+                min={0}
+                value={minSalary}
+                onChange={(e) => setMinSalary(e.target.value)}
+                className="input !w-28"
+                aria-label="Minimum salary"
+              />
+            </div>
+            <p className="hint">
+              {salaryPeriod === "hourly" ? "Per hour — " : "Per year — "}
+              filters out jobs that list a lower max; leave at 0 for no minimum
+            </p>
           </div>
           <div>
             <label className="label">Home location (for radius search)</label>
-            <input value={searchLocation} onChange={(e) => setSearchLocation(e.target.value)} className="input" placeholder="Chicago, IL" />
+            <AutocompleteInput
+              value={searchLocation}
+              onChange={setSearchLocation}
+              suggestions={LOCATION_SUGGESTIONS}
+              ariaLabel="Home location"
+            />
           </div>
           <div>
             <label className="label">Max distance (miles)</label>
-            <input type="number" min={1} max={500} value={maxDistance} onChange={(e) => setMaxDistance(e.target.value)} className="input" placeholder="25" />
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={maxDistance ? Math.min(Number(maxDistance), 100) : 0}
+                onChange={(e) => setMaxDistance(e.target.value === "0" ? "" : e.target.value)}
+                className="flex-1 accent-accent"
+                aria-label="Max distance slider"
+              />
+              <input
+                type="number"
+                min={1}
+                max={500}
+                value={maxDistance}
+                onChange={(e) => setMaxDistance(e.target.value)}
+                className="input !w-24"
+                aria-label="Max distance in miles"
+              />
+            </div>
             <p className="hint">
               {settings?.adzunaEnabled
                 ? "Radius search is active via Adzuna"
@@ -237,12 +350,26 @@ export default function SettingsClient() {
           </label>
           <div>
             <label className="label">Greenhouse company boards</label>
-            <input value={companySlugs} onChange={(e) => setCompanySlugs(e.target.value)} className="input" placeholder="stripe, airbnb" />
+            <TagInput
+              value={companySlugs}
+              onChange={setCompanySlugs}
+              suggestions={GREENHOUSE_BOARD_SUGGESTIONS}
+              showAllOnFocus
+              max={10}
+              ariaLabel="Greenhouse company boards"
+            />
             <p className="hint">Slug works if boards.greenhouse.io/&lt;slug&gt; loads</p>
           </div>
           <div>
             <label className="label">Lever company boards</label>
-            <input value={leverSlugs} onChange={(e) => setLeverSlugs(e.target.value)} className="input" placeholder="netflix, plaid" />
+            <TagInput
+              value={leverSlugs}
+              onChange={setLeverSlugs}
+              suggestions={LEVER_BOARD_SUGGESTIONS}
+              showAllOnFocus
+              max={10}
+              ariaLabel="Lever company boards"
+            />
             <p className="hint">Slug works if jobs.lever.co/&lt;slug&gt; loads</p>
           </div>
           <div className="sm:col-span-2 flex items-center gap-3">

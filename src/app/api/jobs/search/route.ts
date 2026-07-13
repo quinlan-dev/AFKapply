@@ -3,47 +3,76 @@ import { prisma } from "@/lib/prisma";
 import { requireUserId } from "@/lib/session";
 import { rateLimit } from "@/lib/rateLimit";
 import { fetchAllSources, RawJob } from "@/lib/jobSources";
-import { scoreJob } from "@/lib/scoring";
+import { scoreJob, roleTitleFit } from "@/lib/scoring";
 
 export const maxDuration = 60;
 
-const MAX_NEW_SCORES_PER_SEARCH = 30;
+const MAX_NEW_SCORES_PER_SEARCH = 40;
 
-function passesFilters(
-  job: RawJob,
-  pref: {
-    roleTitles: string[];
-    keywords: string[];
-    locations: string[];
-    remoteOnly: boolean;
-    minSalary: number | null;
-    jobTypes: string[];
-  }
-): boolean {
+type Pref = {
+  roleTitles: string[];
+  keywords: string[];
+  locations: string[];
+  remoteOnly: boolean;
+  minSalary: number | null;
+  salaryPeriod: string;
+  jobTypes: string[];
+};
+
+const HOURS_PER_WORK_YEAR = 2080;
+
+function annualizedMinSalary(pref: Pref): number | null {
+  if (!pref.minSalary) return null;
+  return pref.salaryPeriod === "hourly"
+    ? pref.minSalary * HOURS_PER_WORK_YEAR
+    : pref.minSalary;
+}
+
+/**
+ * Tiered relevance instead of a hard substring gate:
+ *   2 = strong (clear title fit or a keyword in the title)
+ *   1 = weak   (partial title fit, or 2+ keywords in the description)
+ *   0 = unrelated — the only tier that's dropped
+ * This keeps matching anchored to the user's target roles without demanding
+ * the exact phrase appear in the job title.
+ */
+function roleRelevance(job: RawJob, pref: Pref): number {
   const title = job.title.toLowerCase();
-  const desc = job.description.toLowerCase();
+  const fit = roleTitleFit(job.title, pref.roleTitles);
+  const keywordInTitle = pref.keywords.some((k) => title.includes(k.toLowerCase()));
+  if (fit >= 0.5 || keywordInTitle) return 2;
 
-  const matchesRole =
-    pref.roleTitles.some((r) => title.includes(r.toLowerCase())) ||
-    (pref.keywords.length > 0 && pref.keywords.some((k) => title.includes(k.toLowerCase())));
-  if (!matchesRole) return false;
+  if (fit > 0) return 1;
+  if (pref.keywords.length >= 2) {
+    const desc = job.description.toLowerCase();
+    const descHits = pref.keywords.filter((k) => desc.includes(k.toLowerCase())).length;
+    if (descHits >= 2) return 1;
+  }
+  return 0;
+}
+
+function passesFilters(job: RawJob, pref: Pref, relevance: number): boolean {
+  if (relevance === 0) return false;
 
   const loc = (job.location ?? "").toLowerCase();
   const isRemote = loc.includes("remote") || loc.includes("anywhere") || loc.includes("worldwide");
 
   if (pref.remoteOnly && !isRemote) return false;
 
-  if (pref.locations.length > 0 && !isRemote) {
+  // Preferred locations: a non-matching location only drops jobs that are
+  // also a weak role fit; strong fits elsewhere are still worth seeing.
+  if (pref.locations.length > 0 && !isRemote && job.location) {
     const matchesLocation = pref.locations.some((l) => loc.includes(l.toLowerCase()));
-    if (!matchesLocation && job.location) return false;
+    if (!matchesLocation && relevance < 2) return false;
   }
 
-  if (pref.minSalary && job.salaryMax && job.salaryMax < pref.minSalary) return false;
+  const minYearly = annualizedMinSalary(pref);
+  if (minYearly && job.salaryMax && job.salaryMax < minYearly) return false;
 
   if (pref.jobTypes.length > 0 && job.jobType) {
     const jt = job.jobType.toLowerCase().replace(/[\s-]/g, "_");
     const matchesType = pref.jobTypes.some((t) => jt.includes(t) || t.includes(jt));
-    if (!matchesType && desc.length > 0) {
+    if (!matchesType && job.description.length > 0) {
       // Fall back to checking the description if the source's type label is odd.
       const typeWords: Record<string, string[]> = {
         full_time: ["full-time", "full time"],
@@ -51,6 +80,7 @@ function passesFilters(
         contract: ["contract"],
         internship: ["intern"]
       };
+      const desc = job.description.toLowerCase();
       const hit = pref.jobTypes.some((t) => (typeWords[t] ?? []).some((w) => desc.includes(w)));
       if (!hit) return false;
     }
@@ -79,13 +109,23 @@ export async function POST() {
     roleTitles: pref.roleTitles,
     searchLocation: pref.searchLocation,
     maxDistanceMiles: pref.maxDistanceMiles,
-    minSalary: pref.minSalary,
+    minSalary: annualizedMinSalary(pref),
     remoteOnly: pref.remoteOnly,
     greenhouseSlugs: pref.companySlugs,
     leverSlugs: pref.leverSlugs
   });
 
-  const relevant = rawJobs.filter((j) => passesFilters(j, pref));
+  // Filter, then score the most relevant jobs first — the per-search scoring
+  // cap should be spent on the best candidates, not arrival order.
+  const relevant = rawJobs
+    .map((job) => ({ job, relevance: roleRelevance(job, pref) }))
+    .filter(({ job, relevance }) => passesFilters(job, pref, relevance))
+    .sort(
+      (a, b) =>
+        b.relevance - a.relevance ||
+        roleTitleFit(b.job.title, pref.roleTitles) - roleTitleFit(a.job.title, pref.roleTitles)
+    )
+    .map(({ job }) => job);
 
   let scored = 0;
   for (const rawJob of relevant) {

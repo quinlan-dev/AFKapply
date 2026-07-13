@@ -14,6 +14,7 @@ const schema = z.object({
   maxDistanceMiles: z.number().int().min(1).max(500).nullable().optional(),
   remoteOnly: z.boolean().default(false),
   minSalary: z.number().int().min(0).max(2_000_000).nullable().optional(),
+  salaryPeriod: z.enum(["yearly", "hourly"]).default("yearly"),
   jobTypes: z.array(z.enum(JOB_TYPES)).max(4).default([]),
   companySlugs: z.array(z.string().trim().min(1).max(64)).max(10).default([]),
   leverSlugs: z.array(z.string().trim().min(1).max(64)).max(10).default([])

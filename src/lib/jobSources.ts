@@ -2,6 +2,8 @@
 //
 // Keyless sources (work out of the box):
 //   - Remotive          remote jobs, keyword search, salary text
+//   - Jobicy            remote jobs, keyword search, salary data
+//   - RemoteOK          remote jobs, salary data
 //   - Arbeitnow         mixed remote/on-site
 //   - The Muse          large multi-industry board
 //   - Greenhouse boards public per-company API (user picks companies)
@@ -103,6 +105,46 @@ async function fetchRemotive(query: string): Promise<RawJob[]> {
   });
 }
 
+async function fetchJobicy(query: string): Promise<RawJob[]> {
+  const data = await getJson(
+    `https://jobicy.com/api/v2/remote-jobs?count=50&tag=${encodeURIComponent(query)}`
+  );
+  return (data?.jobs ?? []).map((j: any) => ({
+    source: "jobicy",
+    externalId: String(j.id ?? j.url),
+    company: j.companyName ?? "Unknown",
+    title: j.jobTitle ?? "",
+    location: j.jobGeo ? `Remote (${j.jobGeo})` : "Remote",
+    description: stripHtml(j.jobDescription ?? j.jobExcerpt ?? "").slice(0, 20_000),
+    url: j.url ?? "",
+    postedAt: j.pubDate ? new Date(j.pubDate).toISOString() : null,
+    salaryMin: typeof j.annualSalaryMin === "number" ? Math.round(j.annualSalaryMin) : null,
+    salaryMax: typeof j.annualSalaryMax === "number" ? Math.round(j.annualSalaryMax) : null,
+    jobType: Array.isArray(j.jobType) && j.jobType.length ? String(j.jobType[0]) : null
+  }));
+}
+
+async function fetchRemoteOK(): Promise<RawJob[]> {
+  const data = await getJson("https://remoteok.com/api");
+  if (!Array.isArray(data)) return [];
+  // First element is a legal/attribution notice, not a job.
+  return data
+    .filter((j: any) => j && j.id && j.position)
+    .map((j: any) => ({
+      source: "remoteok",
+      externalId: String(j.id),
+      company: j.company ?? "Unknown",
+      title: j.position ?? "",
+      location: j.location ? `Remote (${j.location})` : "Remote",
+      description: stripHtml(j.description ?? "").slice(0, 20_000),
+      url: j.url ?? "",
+      postedAt: j.date ?? null,
+      salaryMin: typeof j.salary_min === "number" && j.salary_min > 0 ? Math.round(j.salary_min) : null,
+      salaryMax: typeof j.salary_max === "number" && j.salary_max > 0 ? Math.round(j.salary_max) : null,
+      jobType: null
+    }));
+}
+
 async function fetchArbeitnow(): Promise<RawJob[]> {
   const data = await getJson("https://www.arbeitnow.com/api/job-board-api");
   return (data?.data ?? []).map((j: any) => ({
@@ -123,7 +165,7 @@ async function fetchArbeitnow(): Promise<RawJob[]> {
 async function fetchTheMuse(location?: string | null): Promise<RawJob[]> {
   const loc = location ? `&location=${encodeURIComponent(location)}` : "";
   const pages = await Promise.all(
-    [1, 2].map((p) => getJson(`https://www.themuse.com/api/public/jobs?page=${p}${loc}`))
+    [1, 2, 3, 4].map((p) => getJson(`https://www.themuse.com/api/public/jobs?page=${p}${loc}`))
   );
   const results: RawJob[] = [];
   for (const data of pages) {
@@ -224,10 +266,15 @@ async function fetchAdzuna(params: SearchParams): Promise<RawJob[]> {
 }
 
 export async function fetchAllSources(params: SearchParams): Promise<RawJob[]> {
-  const query = params.roleTitles.slice(0, 3).join(" ") || "software";
+  // Query keyword-searchable sources once per role title (mashing every role
+  // into one query returns far fewer, worse results).
+  const queries = params.roleTitles.slice(0, 3).filter(Boolean);
+  if (queries.length === 0) queries.push("software");
 
   const tasks: Promise<RawJob[]>[] = [
-    fetchRemotive(query),
+    ...queries.map(fetchRemotive),
+    ...queries.map(fetchJobicy),
+    fetchRemoteOK(),
     fetchArbeitnow(),
     fetchTheMuse(params.searchLocation),
     fetchAdzuna(params),

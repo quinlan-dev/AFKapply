@@ -53,6 +53,7 @@ model Preference {
   maxDistanceMiles Int?
   remoteOnly       Boolean  @default(false)
   minSalary        Int?
+  salaryPeriod     String   @default("yearly") // yearly | hourly
   jobTypes         String[]
   companySlugs     String[] // Greenhouse board slugs
   leverSlugs       String[] // Lever board slugs
